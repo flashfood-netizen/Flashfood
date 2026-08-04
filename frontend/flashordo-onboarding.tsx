@@ -632,6 +632,12 @@ function Trial({ go, back }) {
     try {
       // إنشاء الحساب ثم فتح تجربة 3 أيام في القاعدة (RLS/الدوال تفرض القواعد).
       await api.auth.signUp(f.email.trim(), f.pass);
+      // بعض المشاريع تطلب تأكيد البريد ⇒ لا تُنشأ جلسة فوراً. نحاول الدخول لضمان الجلسة.
+      const s = await api.auth.session();
+      if (!s) {
+        try { await api.auth.signIn(f.email.trim(), f.pass); }
+        catch { throw new Error("فعّل حسابك من رابط التأكيد في بريدك، أو اطلب من المشرف تعطيل تأكيد البريد."); }
+      }
       await api.account.startTrial(f.restaurant.trim(), f.owner.trim(), f.phone.trim());
       go("trialDone", { form: f });
     } catch (ex) { setErr({ form: api.safeError(ex) }); }
@@ -835,7 +841,7 @@ function TrialDone({ go, data }) {
       </div>
 
       <div className="gap">
-        <button className="btn btn-night" onClick={() => go("landing")}>ادخل للوحة مطعمك</button>
+        <button className="btn btn-night" onClick={() => { window.location.href = "/app.html"; }}>ادخل للوحة مطعمك</button>
       </div>
     </div>
   );
@@ -854,11 +860,10 @@ function Login({ go, back }) {
     setBusy(true);
     try {
       await api.auth.signIn(email.trim(), pass);
-      // الدور والحالة من القاعدة يقرّران الوجهة (تاجر/أدمن). التوجيه على مستوى التطبيق.
+      // الدور يقرّر الوجهة: الأدمن للوحة الإدارة، غيره للوحة التاجر.
       const p = await api.auth.myProfile();
-      go("landing", { role: p?.role || "merchant" });
-    } catch (ex) { setErr({ form: api.safeError(ex) }); }
-    finally { setBusy(false); }
+      window.location.href = p?.role === "admin" ? "/admin.html" : "/app.html";
+    } catch (ex) { setErr({ form: api.safeError(ex) }); setBusy(false); }
   };
 
   return (

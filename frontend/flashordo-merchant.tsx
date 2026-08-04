@@ -1014,11 +1014,14 @@ export default function App() {
   const loadOrders = (id = rid) => id && api.screens.orders(id, ["unpaid", "cooking", "served"]).then((r) => setOrders(r.map(mOrder))).catch(() => {});
 
   useEffect(() => {
-    api.account.myRestaurant().then((r) => {
-      if (!r) return;
+    (async () => {
+      const session = await api.auth.session();
+      if (!session) { window.location.href = "/"; return; }   // لا جلسة ⇒ لصفحة الدخول
+      const r = await api.account.myRestaurant().catch(() => null);
+      if (!r) { window.location.href = "/"; return; }          // لا مطعم بعد ⇒ للترحيب
       setRest(r); setRid(r.id);
       loadMats(r.id); loadCats(r.id); loadProducts(r.id); loadWorkers(r.id); loadOrders(r.id);
-    }).catch(() => {});
+    })();
   }, []);
   // تحديث الطلبات لحظياً في تبويب المتابعة.
   useEffect(() => {
