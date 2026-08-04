@@ -1,4 +1,5 @@
 import React, { useState, useMemo, useRef, useEffect } from "react";
+import api from "./lib/api";
 
 /* ══════════════════════════════════════════════════════════════
    لوحة التاجر — Flashordo
@@ -279,7 +280,7 @@ const ic = {
 };
 
 /* ════════════════════════ تبويب المخزون ════════════════════════ */
-function StockTab({ mats, setMats, cats, setCats }) {
+function StockTab({ rid, mats, reloadMats, cats, reloadCats }) {
   const [name, setName] = useState("");
   const [unit, setUnit] = useState("كغ");
   const [cost, setCost] = useState("");
@@ -291,33 +292,37 @@ function StockTab({ mats, setMats, cats, setCats }) {
   const [e, setE] = useState({});
   const [flash, setFlash] = useState(null);
 
-  const addCat = () => {
+  const addCat = async () => {
     const err = vName(newCat, "اسم القسم");
     if (err) return setE({ ...e, newCat: err });
-    const id = "c" + Date.now();
-    setCats([...cats, { id, name: newCat.trim(), parent: null, sauces: false }]);
-    setCat(id); setNewCat(""); setE({ ...e, newCat: "" });
+    try {
+      const c = await api.merchant.addCategory({ restaurant_id: rid, name: newCat.trim(), parent_id: null, sauces_enabled: false });
+      await reloadCats(); setCat(c.id); setNewCat(""); setE({ ...e, newCat: "" });
+    } catch (ex) { setE({ ...e, newCat: api.safeError(ex) }); }
   };
 
-  const save = () => {
+  const save = async () => {
     const errs = {
       name: vName(name, "اسم المادة"),
       cost: vNum(cost, "سعر الوحدة"),
       stock: vNum(stock, "الكمية الحالية", { allowZero: true }),
       price: kind === "goods" ? vNum(price, "سعر البيع") : "",
     };
-    // القاعدة: سعر البيع يغطي التكلفة
+    // القاعدة: سعر البيع يغطي التكلفة (تُفرض أيضاً في القاعدة)
     if (kind === "goods" && !errs.price && !errs.cost && Number(price) < Number(cost))
       errs.price = "سعر البيع لا يقل عن سعر الشراء";
     setE(errs);
     if (Object.values(errs).some(Boolean)) return setFlash({ k: "no", t: "راجع الحقول المعلّمة." });
 
-    setMats([...mats, {
-      id: "m" + Date.now(), name: name.trim(), unit, cost: +cost, stock: +stock, kind,
-      ...(kind === "goods" ? { price: +price, category: cat || null } : {}),
-    }]);
-    setName(""); setCost(""); setStock(""); setPrice("");
-    setFlash({ k: "ok", t: "تمت إضافة المادة إلى مخزونك." });
+    try {
+      await api.merchant.addMaterial({
+        restaurant_id: rid, name: name.trim(), unit, cost: +cost, stock: +stock, kind,
+        ...(kind === "goods" ? { price: +price, category_id: cat || null } : {}),
+      });
+      await reloadMats();
+      setName(""); setCost(""); setStock(""); setPrice("");
+      setFlash({ k: "ok", t: "تمت إضافة المادة إلى مخزونك." });
+    } catch (ex) { setFlash({ k: "no", t: api.safeError(ex) }); }
   };
 
   const low = (m) => m.stock <= 0 ? 0 : Math.min(100, (m.stock / (m.kind === "goods" ? 50 : 10)) * 100);
@@ -417,7 +422,7 @@ function StockTab({ mats, setMats, cats, setCats }) {
 }
 
 /* ════════════════════════ تبويب المنتجات ════════════════════════ */
-function ProductsTab({ mats, cats, setCats, products, setProducts }) {
+function ProductsTab({ rid, mats, cats, reloadCats, products, reloadProducts }) {
   const [cName, setCName] = useState("");
   const [cParent, setCParent] = useState("");
   const [cSauces, setCSauces] = useState(true);
@@ -441,33 +446,38 @@ function ProductsTab({ mats, cats, setCats, products, setProducts }) {
   );
   const margin = Number(pPrice || 0) - cost;
 
-  const saveCat = () => {
+  const saveCat = async () => {
     const err = vName(cName, "الاسم");
     setCErr(err);
     if (err) return;
-    setCats([...cats, { id: "c" + Date.now(), name: cName.trim(), parent: cParent || null, sauces: cSauces }]);
-    setCName("");
+    try {
+      await api.merchant.addCategory({ restaurant_id: rid, name: cName.trim(), parent_id: cParent || null, sauces_enabled: cSauces });
+      await reloadCats(); setCName("");
+    } catch (ex) { setCErr(api.safeError(ex)); }
   };
 
-  const saveProduct = () => {
+  const saveProduct = async () => {
     const clean = parts.filter((p) => p.mid && Number(p.q) > 0);
     const errs = {
       name: vName(pName, "اسم المنتج"),
       price: vNum(pPrice, "السعر"),
       parts: clean.length === 0 ? "أضف مكوّناً واحداً على الأقل" : "",
     };
-    // القاعدة: سعر البيع يغطي تكلفة المواد
+    // القاعدة: سعر البيع يغطي تكلفة المواد (تُفرض أيضاً في القاعدة بمُطلِق)
     if (!errs.price && !errs.parts && Number(pPrice) < cost)
       errs.price = `السعر لا يغطي تكلفة المواد (${money(cost)} دج)`;
     setPe(errs);
     if (Object.values(errs).some(Boolean)) return setFlash({ k: "no", t: "لا يمكن حفظ منتج يُباع بخسارة." });
 
-    setProducts([...products, {
-      id: "p" + Date.now(), name: pName.trim(), price: +pPrice, category: pCat || null,
-      parts: clean.map((p) => ({ mid: p.mid, q: Number(p.q) })),
-    }]);
-    setPName(""); setPPrice(""); setParts([{ mid: "", q: "" }]);
-    setFlash({ k: "ok", t: "تم حفظ المنتج." });
+    try {
+      await api.merchant.addProduct({
+        restaurant_id: rid, name: pName.trim(), price: +pPrice, category_id: pCat || null,
+        parts: clean.map((p) => ({ material_id: p.mid, qty: Number(p.q) })),
+      });
+      await reloadProducts();
+      setPName(""); setPPrice(""); setParts([{ mid: "", q: "" }]);
+      setFlash({ k: "ok", t: "تم حفظ المنتج." });
+    } catch (ex) { setFlash({ k: "no", t: api.safeError(ex) }); }
   };
 
   const catName = (id) => cats.find((c) => c.id === id)?.name || "بلا تصنيف";
@@ -505,7 +515,7 @@ function ProductsTab({ mats, cats, setCats, products, setProducts }) {
                 {c.parent ? `داخل ${catName(c.parent)}` : "قسم رئيسي"} · {c.sauces ? "بصلصات" : "بلا صلصات"}
               </span>
             </span>
-            <button className="mini red" onClick={() => setCats(cats.filter((x) => x.id !== c.id))}>حذف</button>
+            <button className="mini red" onClick={async () => { try { await api.merchant.deleteCategory(c.id); await reloadCats(); } catch (ex) { alert(api.safeError(ex)); } }}>حذف</button>
           </div>
         ))}
       </div>
@@ -585,7 +595,7 @@ function ProductsTab({ mats, cats, setCats, products, setProducts }) {
 }
 
 /* ════════════════════════ تبويب العمّال ════════════════════════ */
-function WorkersTab({ workers, setWorkers }) {
+function WorkersTab({ rid, workers, reloadWorkers }) {
   const [name, setName] = useState("");
   const [job, setJob] = useState("");
   const [wageType, setWageType] = useState("fixed");
@@ -595,27 +605,31 @@ function WorkersTab({ workers, setWorkers }) {
   const [payFor, setPayFor] = useState(null);
   const [amount, setAmount] = useState("");
 
-  const save = () => {
+  const save = async () => {
     const errs = { name: vName(name, "اسم العامل"), job: vName(job, "الوظيفة"), wage: vNum(wage, "قيمة الأجر") };
     setE(errs);
     if (Object.values(errs).some(Boolean)) return;
-    setWorkers([...workers, {
-      id: "w" + Date.now(), name: name.trim(), job: job.trim(), wageType, wage: +wage, paid: 0, earned: 0,
-    }]);
-    setName(""); setJob(""); setWage("");
-    setFlash({ k: "ok", t: "تمت إضافة العامل." });
+    try {
+      await api.merchant.addWorker({ restaurant_id: rid, name: name.trim(), job: job.trim(), wage_type: wageType, wage: +wage });
+      await reloadWorkers();
+      setName(""); setJob(""); setWage("");
+      setFlash({ k: "ok", t: "تمت إضافة العامل." });
+    } catch (ex) { setFlash({ k: "no", t: api.safeError(ex) }); }
   };
 
-  const pay = (w) => {
+  const pay = async (w) => {
     const err = vNum(amount, "المبلغ");
     if (err) return setE({ ...e, pay: err });
     const due = w.earned - w.paid;
-    // القاعدة: رصيد العامل لا يصبح سالباً
+    // القاعدة: رصيد العامل لا يصبح سالباً (تُفرض أيضاً في القاعدة)
     if (Number(amount) > due)
       return setE({ ...e, pay: `المستحقّ ${money(due)} دج فقط — لا يمكن تجاوزه` });
-    setWorkers(workers.map((x) => x.id === w.id ? { ...x, paid: x.paid + Number(amount) } : x));
-    setAmount(""); setPayFor(null); setE({ ...e, pay: "" });
-    setFlash({ k: "ok", t: "تم تسجيل الدفع." });
+    try {
+      await api.merchant.payWorker(w.id, Number(amount));
+      await reloadWorkers();
+      setAmount(""); setPayFor(null); setE({ ...e, pay: "" });
+      setFlash({ k: "ok", t: "تم تسجيل الدفع." });
+    } catch (ex) { setE({ ...e, pay: api.safeError(ex) }); }
   };
 
   return (
@@ -779,34 +793,27 @@ function ReportsTab({ orders, products, mats, workers }) {
 }
 
 /* ════════════════════════ تبويب المتابعة ════════════════════════ */
-function WatchTab({ orders, setOrders, products, mats, setMats }) {
+function WatchTab({ orders, reloadOrders, reloadMats, products, mats }) {
   const [flash, setFlash] = useState(null);
   const prodById = (id) => products.find((p) => p.id === id);
   const total = (o) => o.lines.reduce((t, l) => t + (prodById(l.pid)?.price || 0) * l.q, 0);
 
-  /* تأكيد الدفع: هنا فقط يُخصم المخزون، وهنا فقط يظهر الطلب للمطبخ. */
-  const confirmPay = (o) => {
-    const need = {};
-    o.lines.forEach((l) => prodById(l.pid)?.parts.forEach((x) => {
-      need[x.mid] = (need[x.mid] || 0) + x.q * l.q;
-    }));
-    const short = Object.entries(need).find(([mid, q]) => (mats.find((m) => m.id === mid)?.stock || 0) < q);
-    if (short) {
-      const m = mats.find((x) => x.id === short[0]);
-      return setFlash({ k: "no", t: `المخزون لا يكفي: ${m?.name}. لا يمكن تمرير الطلب.` });
-    }
-    setMats(mats.map((m) => need[m.id] ? { ...m, stock: qty(m.stock - need[m.id]) } : m));
-    setOrders(orders.map((x) => x.id === o.id ? { ...x, status: "cooking" } : x));
-    setFlash({ k: "ok", t: `تم تأكيد الدفع — الطلب ${o.no} انتقل للمطبخ وخُصمت مواده.` });
+  /* تأكيد الدفع الذرّي في القاعدة: هنا فقط يُخصم المخزون ويظهر للمطبخ. */
+  const confirmPay = async (o) => {
+    try {
+      await api.screens.confirmPayment(o.id);       // الخصم الذرّي + الفحص في القاعدة
+      await Promise.all([reloadOrders(), reloadMats()]);
+      setFlash({ k: "ok", t: `تم تأكيد الدفع — الطلب ${o.no} انتقل للمطبخ وخُصمت مواده.` });
+    } catch (ex) { setFlash({ k: "no", t: api.safeError(ex) }); }
   };
 
-  const serve = (o) => {
-    setOrders(orders.map((x) => x.id === o.id ? { ...x, status: "served" } : x));
-    setFlash({ k: "ok", t: `تم تسليم الطلب ${o.no}.` });
+  const serve = async (o) => {
+    try { await api.screens.serveOrder(o.id); await reloadOrders(); setFlash({ k: "ok", t: `تم تسليم الطلب ${o.no}.` }); }
+    catch (ex) { setFlash({ k: "no", t: api.safeError(ex) }); }
   };
-  const reject = (o) => {
-    setOrders(orders.map((x) => x.id === o.id ? { ...x, status: "rejected" } : x));
-    setFlash({ k: "warn", t: `رُفض الطلب ${o.no} — لم يُخصم أي شيء من المخزون.` });
+  const reject = async (o) => {
+    try { await api.screens.rejectOrder(o.id); await reloadOrders(); setFlash({ k: "warn", t: `رُفض الطلب ${o.no} — لم يُخصم أي شيء من المخزون.` }); }
+    catch (ex) { setFlash({ k: "no", t: api.safeError(ex) }); }
   };
 
   const g = (s) => orders.filter((o) => o.status === s);
@@ -874,72 +881,79 @@ function WatchTab({ orders, setOrders, products, mats, setMats }) {
 }
 
 /* ════════════════════════ تبويب الشاشات ════════════════════════ */
-function ScreensTab() {
+function ScreensTab({ rid, code }) {
   const [email, setEmail] = useState("");
   const [pass, setPass] = useState("");
+  const [screen, setScreen] = useState("cashier");   // كاشير أو مطبخ
   const [e, setE] = useState({});
-  const [made, setMade] = useState(false);
+  const [flash, setFlash] = useState(null);
+  const [busy, setBusy] = useState(false);
 
-  const save = () => {
+  const save = async () => {
     const errs = {
       email: !/^[a-zA-Z0-9._%+-]+@[a-zA-Z0-9-]+(\.[a-zA-Z0-9-]+)*\.[a-zA-Z]{2,}$/.test(email.trim())
         ? "أدخل بريداً إلكترونياً صحيحاً" : "",
       pass: pass.length < 8 ? "كلمة السر لا تقل عن 8 رموز"
-        : !/[a-zA-Z\u0621-\u064A]/.test(pass) || !/\d/.test(pass) ? "تجمع بين حروف وأرقام" : "",
+        : !/[a-zA-Zء-ي]/.test(pass) || !/\d/.test(pass) ? "تجمع بين حروف وأرقام" : "",
     };
     setE(errs);
     if (Object.values(errs).some(Boolean)) return;
-    setMade(true);
+    setBusy(true);
+    try {
+      // يمرّ عبر Edge Function (service_role على السيرفر) — الموظّف لا يبلغ الإدارة أبداً.
+      await api.merchant.createStaff(email.trim(), pass, screen);
+      setFlash({ k: "ok", t: `تم إنشاء حساب ${screen === "cashier" ? "الكاشير" : "المطبخ"}. أعطِ الموظّف كلمة السر.` });
+      setEmail(""); setPass("");
+    } catch (ex) { setFlash({ k: "no", t: api.safeError(ex) }); }
+    finally { setBusy(false); }
   };
 
+  // شاشات المحل: الزبون بكود المطعم (بلا حساب)، والموظّف يدخل بحسابه.
+  const base = `${window.location.origin}/screens.html`;
+  const openCustomer = () => code && window.open(`${base}?code=${encodeURIComponent(code)}`, "_blank", "noopener");
+  const openStaff = () => window.open(base, "_blank", "noopener");
+
   const screens = [
-    ["شاشة الزبون", "على تابلت المحل — لإنشاء الطلبات", "#FFB703", "#14213D",
+    ["شاشة الزبون", "على تابلت المحل — بكود مطعمك، بلا حساب", "#FFB703", "#14213D", openCustomer,
       <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.9" strokeLinecap="round"><path d="M7 3v8a2 2 0 004 0V3M9 11v10M17 3c-1.5 1.5-2 3.5-2 6s.5 3 2 3v9"/></svg>],
-    ["شاشة الكاشير", "على جهاز الصندوق — لاستلام الدفع", "#12805C", "#fff",
+    ["شاشة الكاشير", "على جهاز الصندوق — بحساب الكاشير", "#12805C", "#fff", openStaff,
       <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.9" strokeLinecap="round"><rect x="2.5" y="5.5" width="19" height="13" rx="2.5"/><path d="M2.5 10h19M6.5 15h4"/></svg>],
-    ["شاشة المطبخ", "على شاشة الطهاة — للتحضير والتسليم", "#FB5607", "#fff",
+    ["شاشة المطبخ", "على شاشة الطهاة — بحساب المطبخ", "#FB5607", "#fff", openStaff,
       <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.9" strokeLinecap="round" strokeLinejoin="round"><path d="M6 13h12v4a3 3 0 01-3 3H9a3 3 0 01-3-3v-4Z"/><path d="M7 13a3.2 3.2 0 01.3-5.6A3.4 3.4 0 0112 5a3.4 3.4 0 014.7 2.4A3.2 3.2 0 0117 13"/></svg>],
   ];
 
   return (
     <>
       <div className="card">
-        <h2>دخول الكاشير والمطبخ</h2>
+        <h2>حسابات الكاشير والمطبخ</h2>
         <p className="lead">
-          حساب منفصل عن حسابك — يستلم الطلبات ويسلّمها فقط، ولا يرى المخزون ولا التقارير ولا الأرباح.
+          لكلٍّ حساب منفصل بكلمة سرّ تعطيها أنت — يرى الطلبات فقط، ولا مخزون ولا تقارير ولا إدارة.
         </p>
-        <div className="item" style={{ paddingBottom: 4 }}>
-          <span className="sb">الحالة</span>
-          <span className="big" style={{ color: made ? "var(--good)" : "var(--bolt)" }}>
-            {made ? "مُفعّل" : "لم يُنشأ بعد"}
-          </span>
-        </div>
-        <F label="البريد الإلكتروني لحساب الموظّفين" error={e.email}>
-          <input className={e.email ? "bad" : ""} value={email} placeholder="staff@example.com"
+        <F label="الشاشة">
+          <div className="seg2" style={{ marginTop: 0 }}>
+            <button className={screen === "cashier" ? "on" : ""} onClick={() => setScreen("cashier")}>كاشير</button>
+            <button className={screen === "kitchen" ? "on" : ""} onClick={() => setScreen("kitchen")}>مطبخ</button>
+          </div>
+        </F>
+        <F label="البريد الإلكتروني للموظّف" error={e.email}>
+          <input className={e.email ? "bad" : ""} value={email} placeholder="cashier@example.com"
             onChange={(v) => { setEmail(v.target.value); setE({ ...e, email: "" }); }} />
         </F>
         <F label="كلمة السر" error={e.pass} hint="8 رموز فأكثر، تجمع حروفاً وأرقاماً">
           <input className={e.pass ? "bad" : ""} type="password" value={pass} placeholder="8 رموز على الأقل"
             onChange={(v) => { setPass(v.target.value); setE({ ...e, pass: "" }); }} />
         </F>
-        {made && <div className="flash ok">تم حفظ حساب الموظّفين.</div>}
-        <button className="save" onClick={save}>حفظ حساب الموظّفين</button>
-      </div>
-
-      <div className="card">
-        <h2>نسخة احتياطية</h2>
-        <p className="lead">
-          نزّل نسخة من كل بياناتك (المخزون، المنتجات، الأقسام، العمّال، الطلبات) كملف واحد.
-          احفظه في مكان آمن، وكرّره أسبوعياً.
-        </p>
-        <button className="save">تنزيل نسخة احتياطية</button>
+        {flash && <div className={"flash " + flash.k}>{flash.t}</div>}
+        <button className="save" onClick={save} disabled={busy}>
+          {busy ? "جارٍ الإنشاء…" : "إنشاء حساب الموظّف"}
+        </button>
       </div>
 
       <div className="card">
         <h2>شاشات المحل</h2>
-        <p className="lead">كل زر يفتح الشاشة في تبويب جديد حاملاً معرّف مطعمك تلقائياً — بلا نسخ يدوي.</p>
-        {screens.map(([t, d, bg, fg, icon]) => (
-          <button className="screen" key={t}>
+        <p className="lead">افتح كل شاشة في جهازها. شاشة الزبون تحمل كود مطعمك تلقائياً.</p>
+        {screens.map(([t, d, bg, fg, onClick, icon]) => (
+          <button className="screen" key={t} onClick={onClick}>
             <span className="sq" style={{ background: bg, color: fg }}>{icon}</span>
             <span>
               <span className="t" style={{ display: "block" }}>{t}</span>
@@ -971,16 +985,49 @@ const HEADS = {
   disp: ["الشاشات", "حساب الموظّفين وشاشات المحل ونسختك الاحتياطية."],
 };
 
+// محوّلات: صفوف القاعدة ← الأشكال التي تتوقّعها الواجهة (بلا تغيير في JSX).
+const mMat = (m) => ({ ...m, cost: +m.cost, stock: +m.stock, price: m.price == null ? undefined : +m.price, category: m.category_id });
+const mCat = (c) => ({ id: c.id, name: c.name, parent: c.parent_id, sauces: c.sauces_enabled });
+const mProd = (p) => ({ id: p.id, name: p.name, price: +p.price, category: p.category_id,
+  parts: (p.product_parts || []).map((x) => ({ mid: x.material_id, q: +x.qty })) });
+const mWorker = (w) => ({ id: w.id, name: w.name, job: w.job, wageType: w.wage_type,
+  wage: +w.wage, paid: +w.paid, earned: +w.earned });
+const mOrder = (o) => ({ id: o.id, no: o.no, status: o.status,
+  at: new Date(o.created_at).toLocaleTimeString("ar", { hour: "2-digit", minute: "2-digit" }),
+  lines: (o.order_lines || []).map((l) => ({ pid: l.product_id, q: +l.qty, sauces: l.sauces || [] })) });
+
 export default function App() {
   const [tab, setTab] = useState("stock");
-  const [mats, setMats] = useState(SEED_MATERIALS);
-  const [cats, setCats] = useState(SEED_CATS);
-  const [products, setProducts] = useState(SEED_PRODUCTS);
-  const [workers, setWorkers] = useState(SEED_WORKERS);
-  const [orders, setOrders] = useState(SEED_ORDERS);
+  const [rid, setRid] = useState(null);
+  const [rest, setRest] = useState(null);
+  const [mats, setMats] = useState([]);
+  const [cats, setCats] = useState([]);
+  const [products, setProducts] = useState([]);
+  const [workers, setWorkers] = useState([]);
+  const [orders, setOrders] = useState([]);
   const top = useRef(null);
 
+  const loadMats = (id = rid) => id && api.merchant.materials(id).then((r) => setMats(r.map(mMat))).catch(() => {});
+  const loadCats = (id = rid) => id && api.merchant.categories(id).then((r) => setCats(r.map(mCat))).catch(() => {});
+  const loadProducts = (id = rid) => id && api.merchant.products(id).then((r) => setProducts(r.map(mProd))).catch(() => {});
+  const loadWorkers = (id = rid) => id && api.merchant.workers(id).then((r) => setWorkers(r.map(mWorker))).catch(() => {});
+  const loadOrders = (id = rid) => id && api.screens.orders(id, ["unpaid", "cooking", "served"]).then((r) => setOrders(r.map(mOrder))).catch(() => {});
+
+  useEffect(() => {
+    api.account.myRestaurant().then((r) => {
+      if (!r) return;
+      setRest(r); setRid(r.id);
+      loadMats(r.id); loadCats(r.id); loadProducts(r.id); loadWorkers(r.id); loadOrders(r.id);
+    }).catch(() => {});
+  }, []);
+  // تحديث الطلبات لحظياً في تبويب المتابعة.
+  useEffect(() => {
+    if (tab !== "watch" || !rid) return;
+    const t = setInterval(() => loadOrders(), 4000); return () => clearInterval(t);
+  }, [tab, rid]);
   useEffect(() => { top.current?.scrollIntoView({ block: "start" }); }, [tab]);
+
+  const logout = async () => { await api.auth.signOut(); window.location.reload(); };
 
   return (
     <div className="mr">
@@ -989,9 +1036,9 @@ export default function App() {
         <div className="top">
           <div className="brand">
             <Logo d={46} />
-            <span className="shop">لوحة التاجر · نيتي</span>
+            <span className="shop">لوحة التاجر{rest ? ` · ${rest.name}` : ""}</span>
           </div>
-          <button className="out">
+          <button className="out" onClick={logout}>
             <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.9" strokeLinecap="round" strokeLinejoin="round">
               <path d="M15 17l5-5-5-5M20 12H9M12 4H7a3 3 0 00-3 3v10a3 3 0 003 3h5" />
             </svg>
@@ -1004,12 +1051,12 @@ export default function App() {
           <p>{HEADS[tab][1]}</p>
         </div>
 
-        {tab === "stock" && <StockTab mats={mats} setMats={setMats} cats={cats} setCats={setCats} />}
-        {tab === "prod" && <ProductsTab mats={mats} cats={cats} setCats={setCats} products={products} setProducts={setProducts} />}
-        {tab === "team" && <WorkersTab workers={workers} setWorkers={setWorkers} />}
+        {tab === "stock" && <StockTab rid={rid} mats={mats} reloadMats={loadMats} cats={cats} setCats={setCats} reloadCats={loadCats} />}
+        {tab === "prod" && <ProductsTab rid={rid} mats={mats} cats={cats} reloadCats={loadCats} products={products} reloadProducts={loadProducts} />}
+        {tab === "team" && <WorkersTab rid={rid} workers={workers} reloadWorkers={loadWorkers} />}
         {tab === "rep" && <ReportsTab orders={orders} products={products} mats={mats} workers={workers} />}
-        {tab === "watch" && <WatchTab orders={orders} setOrders={setOrders} products={products} mats={mats} setMats={setMats} />}
-        {tab === "disp" && <ScreensTab />}
+        {tab === "watch" && <WatchTab orders={orders} reloadOrders={loadOrders} reloadMats={loadMats} products={products} mats={mats} />}
+        {tab === "disp" && <ScreensTab rid={rid} code={rest?.screen_code} />}
       </div>
 
       <nav className="nav">

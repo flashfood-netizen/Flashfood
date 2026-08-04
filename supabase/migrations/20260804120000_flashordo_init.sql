@@ -268,10 +268,11 @@ create index on public.orders (restaurant_id, created_at);
 create table public.order_lines (
   id          uuid primary key default gen_random_uuid(),
   order_id    uuid not null references public.orders(id) on delete cascade,
-  product_id  uuid not null references public.products(id),
-  qty         numeric(12,3) not null check (qty > 0),
-  sauces      text[] not null default '{}',
-  unit_price  numeric(12,2) not null check (unit_price >= 0)   -- سعر البيع مجمّد وقت الطلب
+  product_id   uuid not null references public.products(id),
+  product_name text,                                            -- اسم المنتج مجمّد (تراه الشاشات دون قراءة products)
+  qty          numeric(12,3) not null check (qty > 0),
+  sauces       text[] not null default '{}',
+  unit_price   numeric(12,2) not null check (unit_price >= 0)   -- سعر البيع مجمّد وقت الطلب
 );
 alter table public.order_lines enable row level security;
 create index on public.order_lines (order_id);
@@ -651,7 +652,7 @@ create or replace function public.place_order(p_code text, p_lines jsonb)
 returns integer language plpgsql security definer set search_path = public as $$
 declare
   v_rid uuid; v_no integer; v_oid uuid; v_total numeric(12,2) := 0;
-  v_line jsonb; v_pid uuid; v_qty numeric; v_price numeric; v_sauces text[];
+  v_line jsonb; v_pid uuid; v_qty numeric; v_price numeric; v_name text; v_sauces text[];
 begin
   select id into v_rid from public.restaurants where screen_code = p_code;
   if v_rid is null or not public.is_restaurant_open(v_rid) then
@@ -676,12 +677,12 @@ begin
       '{}');
     if v_qty is null or v_qty <= 0 then raise exception 'BAD_QTY'; end if;
 
-    select price into v_price from public.products
+    select price, name into v_price, v_name from public.products
       where id = v_pid and restaurant_id = v_rid;      -- المنتج من نفس المطعم فقط
     if v_price is null then raise exception 'BAD_PRODUCT'; end if;
 
-    insert into public.order_lines (order_id, product_id, qty, sauces, unit_price)
-      values (v_oid, v_pid, v_qty, v_sauces, v_price);
+    insert into public.order_lines (order_id, product_id, product_name, qty, sauces, unit_price)
+      values (v_oid, v_pid, v_name, v_qty, v_sauces, v_price);
     v_total := v_total + v_price * v_qty;
   end loop;
 

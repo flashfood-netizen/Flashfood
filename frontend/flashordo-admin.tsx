@@ -1,4 +1,5 @@
 import React, { useState, useEffect, useMemo, useRef } from "react";
+import api from "./lib/api";
 
 /* ══════════════════════════════════════════════════════════════
    لوحة المالك — Flashordo
@@ -374,24 +375,31 @@ function Gate({ onIn }) {
     if (Object.values(e).some(Boolean)) return;
 
     setBusy(true);
-    // TODO: supabase.auth.signInWithPassword({ email, password: pass })
-    //       ثم التأكد من profiles.role === 'admin' قبل السماح بالدخول.
-    //       أي خطأ من القاعدة يُسجَّل في السيرفر ولا يُعرض نصّه للمستخدم.
-    await new Promise((r) => setTimeout(r, 450));
-    setBusy(false);
-
     if (!navigator.onLine) {
+      setBusy(false);
       setBanner({ kind: "net", text: "لا يوجد اتصال بالإنترنت، يرجى التحقق من الشبكة." });
       return;
     }
-
-    const n = tries + 1;
-    setTries(n);
-    if (n >= MAX_TRIES) {
-      setLockLeft(LOCK_SECONDS);
-      setBanner({ kind: "bad", text: "تجاوزت عدد المحاولات المسموح بها. الدخول معطّل مؤقتاً." });
-    } else {
-      setBanner({ kind: "bad", text: "بيانات الدخول غير صحيحة." });
+    try {
+      await api.auth.signIn(email.trim(), pass);
+      const p = await api.auth.myProfile();
+      if (p?.role !== "admin") {           // الدخول مقتصر على الأدمن
+        await api.auth.signOut();
+        throw new Error("بيانات الدخول غير صحيحة.");
+      }
+      setBusy(false);
+      onIn();                               // جلسة أدمن مؤكّدة
+      return;
+    } catch {
+      setBusy(false);
+      const n = tries + 1;
+      setTries(n);
+      if (n >= MAX_TRIES) {
+        setLockLeft(LOCK_SECONDS);
+        setBanner({ kind: "bad", text: "تجاوزت عدد المحاولات المسموح بها. الدخول معطّل مؤقتاً." });
+      } else {
+        setBanner({ kind: "bad", text: "بيانات الدخول غير صحيحة." });
+      }
     }
   };
 
@@ -426,11 +434,6 @@ function Gate({ onIn }) {
           {busy ? "جارٍ التحقّق…" : "دخول"}
         </button>
       </div>
-
-      {/* مدخل تجريبي للمعاينة فقط — يُحذف عند الربط بـ Supabase */}
-      <p className="hint" style={{ textAlign: "center", marginTop: 22 }}>
-        <button className="rlink" onClick={onIn}>معاينة اللوحة (عرض تجريبي)</button>
-      </p>
     </div>
   );
 }
@@ -450,11 +453,13 @@ function trialLeft(sentAt) {
   return { over: false, txt: h >= 24 ? `${Math.floor(h / 24)} يوم متبقٍ` : `${h} ساعة متبقّية` };
 }
 
-function OrdersTab({ requests, setRequests }) {
-  const decide = (id, status) => {
-    // TODO: تحديث payments.status و restaurants.status في Supabase،
-    //       مع تسجيل reviewed_by و reviewed_at.
-    setRequests((rs) => rs.map((r) => (r.id === id ? { ...r, status } : r)));
+function OrdersTab({ requests, reload }) {
+  const decide = async (id, status) => {
+    try {
+      // تأكيد ⇒ تفعيل + تجديد تراكمي، أو رفض — ذرّياً في القاعدة.
+      await api.admin.reviewPayment(id, status === "confirmed");
+      reload();
+    } catch (e) { alert(api.safeError(e)); }
   };
 
   const pending = requests.filter((r) => r.status === "pending");
@@ -512,11 +517,13 @@ function RequestCard({ r, decide }) {
         )}
       </div>
 
-      {!isTrial && (
+      {!isTrial && r.receipt_path && (
         <div className="receipt">
           <span className="lbl">وصل الدفع</span>
-          {/* TODO: رابط موقّع من Supabase Storage صالح لدقائق معدودة */}
-          <button className="rlink">عرض الوصل</button>
+          <button className="rlink" onClick={async () => {
+            try { window.open(await api.admin.receiptUrl(r.receipt_path), "_blank", "noopener"); }
+            catch (e) { alert(api.safeError(e)); }
+          }}>عرض الوصل</button>
         </div>
       )}
 
@@ -641,9 +648,33 @@ const RANGE_CAP = {
   month: "إيرادات آخر 30 يوماً", year: "إيرادات آخر 12 شهراً",
 };
 
-function RevenueTab({ shops }) {
+const RANGE_DAYS = { day: 1, week: 7, month: 30, year: 365 };
+
+function RevenueTab({ shops, requests = [] }) {
   const [range, setRange] = useState("week");
-  const d = SEED_REVENUE[range];
+
+  // تُحسب من الدفعات المؤكّدة داخل النافذة الزمنية المختارة (لا بيانات وهمية).
+  const d = useMemo(() => {
+    const since = Date.now() - RANGE_DAYS[range] * 864e5;
+    const paid = requests.filter((r) => r.status === "confirmed" && new Date(r.sentAt).getTime() >= since);
+    const total = paid.reduce((s, r) => s + (r.amount || 0), 0);
+    const fresh = paid.filter((r) => !r.renewal).length;
+    const renew = paid.filter((r) => r.renewal).length;
+    const byPlan = { month: 0, six: 0, life: 0 };
+    paid.forEach((r) => { byPlan[r.plan] = (byPlan[r.plan] || 0) + (r.amount || 0); });
+    // تفصيل يومي مبسّط للنافذة (حتى 7 أعمدة).
+    const cols = Math.min(RANGE_DAYS[range], 7);
+    const daily = Array.from({ length: cols }, (_, i) => {
+      const dayStart = Date.now() - (cols - 1 - i) * 864e5;
+      const lbl = new Date(dayStart).toLocaleDateString("ar", { weekday: "short" });
+      const v = paid.filter((r) => {
+        const t = new Date(r.sentAt).getTime();
+        return t >= dayStart - 864e5 / 2 && t < dayStart + 864e5 / 2;
+      }).reduce((s, r) => s + (r.amount || 0), 0);
+      return [lbl, v];
+    });
+    return { total, fresh, renew, byPlan, daily };
+  }, [requests, range]);
   const peak = Math.max(...d.daily.map(([, v]) => v), 1);
 
   const expiring = useMemo(() => {
@@ -744,7 +775,7 @@ function SettingsTab({ settings, setSettings }) {
     return "";
   };
 
-  const save = () => {
+  const save = async () => {
     const e = {
       rip: checkRip(form.rip),
       priceMonth: checkPrice(form.priceMonth, "سعر الباقة الشهرية"),
@@ -753,9 +784,11 @@ function SettingsTab({ settings, setSettings }) {
     };
     setErr(e);
     if (Object.values(e).some(Boolean)) return;
-    // TODO: update app_settings في Supabase (سياسة الكتابة للأدمن فقط)
-    setSettings({ ...form, priceMonth: +form.priceMonth, priceSix: +form.priceSix, priceLife: +form.priceLife });
-    setSaved(true);
+    try {
+      await api.admin.saveSettings(form.rip, +form.priceMonth, +form.priceSix, +form.priceLife);
+      setSettings({ ...form, priceMonth: +form.priceMonth, priceSix: +form.priceSix, priceLife: +form.priceLife });
+      setSaved(true);
+    } catch (ex) { setErr({ rip: api.safeError(ex) }); }
   };
 
   return (
@@ -793,13 +826,39 @@ function SettingsTab({ settings, setSettings }) {
 /* ══════════════════  اللوحة  ══════════════════ */
 const TABS = [["orders", "الطلبات"], ["shops", "المطاعم"], ["revenue", "الإيرادات"], ["settings", "الإعدادات"]];
 
+// تحويل صفوف القاعدة إلى شكل بطاقات الواجهة.
+const toRequest = (p) => ({
+  id: p.id, kind: "paid",
+  restaurant: p.restaurants?.name, owner: p.restaurants?.owner_name,
+  phone: p.restaurants?.phone, email: p.restaurants?.email,
+  plan: p.plan, amount: p.amount, ref: p.transfer_reference,
+  receipt_path: p.receipt_path, sentAt: p.created_at, status: p.status, renewal: p.is_renewal,
+});
+const toShop = (s) => ({
+  id: s.id, kind: s.account_type === "trial" ? "trial" : "paid",
+  restaurant: s.name, owner: s.owner_name, phone: s.phone, email: s.email,
+  plan: s.account_type === "trial" ? null : "paid",
+  joined: (s.created_at || "").slice(0, 10),
+  ends: (s.subscription_ends_at || s.trial_ends_at || "").slice(0, 10) || null,
+});
+
 function Dashboard({ onOut }) {
   const [tab, setTab] = useState("orders");
-  const [requests, setRequests] = useState(SEED_REQUESTS);
-  const [shops] = useState(SEED_SHOPS);
+  const [requests, setRequests] = useState([]);
+  const [shops, setShops] = useState([]);
   const [settings, setSettings] = useState(INITIAL_SETTINGS);
   const top = useRef(null);
 
+  const reload = () => {
+    api.admin.requests().then((rows) => setRequests((rows || []).map(toRequest))).catch(() => {});
+    api.admin.shops().then((rows) => setShops((rows || []).map(toShop))).catch(() => {});
+  };
+  useEffect(() => {
+    reload();
+    api.admin.settings().then((s) => setSettings({
+      rip: s.rip_account, priceMonth: s.price_month, priceSix: s.price_six, priceLife: s.price_life,
+    })).catch(() => {});
+  }, []);
   useEffect(() => { top.current?.scrollIntoView({ block: "start" }); }, [tab]);
 
   const pendingCount = requests.filter((r) => r.status === "pending").length;
@@ -829,9 +888,9 @@ function Dashboard({ onOut }) {
         ))}
       </div>
 
-      {tab === "orders" && <OrdersTab requests={requests} setRequests={setRequests} />}
+      {tab === "orders" && <OrdersTab requests={requests} reload={reload} />}
       {tab === "shops" && <ShopsTab shops={shops} />}
-      {tab === "revenue" && <RevenueTab shops={shops} />}
+      {tab === "revenue" && <RevenueTab shops={shops} requests={requests} />}
       {tab === "settings" && <SettingsTab settings={settings} setSettings={setSettings} />}
     </div>
   );
@@ -839,16 +898,15 @@ function Dashboard({ onOut }) {
 
 /* ══════════════════  الجذر + حارس المسار  ══════════════════ */
 export default function App() {
-  /* حارس المسار: لا يُعرض أي عنصر من اللوحة قبل التأكد من وجود جلسة أدمن.
-     TODO: عند الربط — تحقّق من supabase.auth.getSession() و profiles.role
-     قبل أول رسم، وأعد التوجيه لصفحة الدخول إن لم توجد جلسة. */
+  // حارس المسار: لا يُعرض شيء قبل التأكّد من جلسة أدمن (profiles.role === 'admin').
   const [session, setSession] = useState(false);
 
-  const logout = () => {
-    // TODO: supabase.auth.signOut()
-    //       ثم localStorage.clear() و sessionStorage.clear()
-    //       ثم window.location.replace('/admin/login') لحذف سجل التصفح
-    //       ومنع العودة بزر الرجوع.
+  useEffect(() => {
+    api.auth.myProfile().then((p) => { if (p?.role === "admin") setSession(true); }).catch(() => {});
+  }, []);
+
+  const logout = async () => {
+    await api.auth.signOut();               // يمسح الجلسة والتخزين المحلي
     setSession(false);
   };
 
