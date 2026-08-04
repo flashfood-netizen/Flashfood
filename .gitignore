@@ -1,0 +1,17 @@
+# أسرار — لا تُرفع أبداً
+.env
+.env.*
+!.env.example
+*.key
+service_role*
+supabase/.temp/
+
+# تبعيات وبناء
+node_modules/
+dist/
+build/
+.next/
+
+# نظام
+.DS_Store
+*.log
