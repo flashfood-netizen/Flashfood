@@ -31,6 +31,8 @@ h1,h2,h3,.disp{font-family:"Baloo Bhaijaan 2","Tajawal","Segoe UI",system-ui,san
 p{margin:0}
 .wrap{max-width:940px;margin:0 auto;padding:0 22px 96px}
 .ltr{direction:ltr;unicode-bidi:isolate;display:inline-block}
+/* عزل كل رقم لاتيني عن الاتجاه RTL كي لا تنقلب مجموعات الآلاف (CLAUDE.md §5) */
+.num{direction:ltr;unicode-bidi:isolate;display:inline-block}
 
 /* ── الشعار ── */
 .mark{display:inline-grid;place-items:center;filter:drop-shadow(0 6px 16px var(--glow))}
@@ -103,7 +105,7 @@ p{margin:0}
   line-height:1;display:grid;place-items:center}
 .stepper button:hover{border-color:var(--accent);color:var(--accent)}
 .stepper .q{min-width:26px;text-align:center;font-family:"Baloo Bhaijaan 2";font-weight:700;
-  font-variant-numeric:tabular-nums}
+  font-variant-numeric:tabular-nums;direction:ltr;unicode-bidi:isolate}
 .add{font:inherit;font-size:12.5px;font-weight:600;color:var(--accent);background:none;
   border:none;cursor:pointer;padding:6px}
 .cartbar{margin-top:16px;display:flex;align-items:center;justify-content:space-between;
@@ -127,6 +129,7 @@ p{margin:0}
 @keyframes pulse{0%,100%{opacity:1}50%{opacity:.25}}
 .amount{font-family:"Baloo Bhaijaan 2";font-weight:800;font-size:38px;color:var(--gold);
   line-height:1.25;font-variant-numeric:tabular-nums;margin-top:6px}
+.pmeta b{direction:ltr;unicode-bidi:isolate}
 .bars{display:flex;align-items:flex-end;gap:9px;height:120px;margin-top:20px}
 .bars i{flex:1;border-radius:7px 7px 3px 3px;background:linear-gradient(to top,var(--flash-red),var(--ember));
   height:8%;transition:height .5s cubic-bezier(.2,.7,.3,1)}
@@ -216,7 +219,7 @@ p{margin:0}
       </div>
       <div class="sys dark">
         <span class="mark"><svg width="30" height="30"><use href="#flameStar"/></svg></span>
-        <span class="cap">فافيكون ٣٢px</span>
+        <span class="cap">فافيكون 32px</span>
       </div>
     </div>
   </section>
@@ -224,7 +227,7 @@ p{margin:0}
   <section class="section">
     <div class="label">تفاعلية — كما يراها زبونك على التابلت</div>
     <div class="panel">
-      <div class="mhead"><h3>قائمة الطعام</h3><span class="note">طاولة ٤ · عرض تجريبي</span></div>
+      <div class="mhead"><h3>قائمة الطعام</h3><span class="note">طاولة 4 · عرض تجريبي</span></div>
       <div class="chips" id="chips">
         <button class="chip on" data-cat="pizza">بيتزا</button>
         <button class="chip" data-cat="tacos">طاكوس</button>
@@ -232,7 +235,7 @@ p{margin:0}
         <button class="chip" data-cat="baguette">رغيف</button>
       </div>
       <div class="grid" id="grid"></div>
-      <div class="cartbar"><span class="t" id="cartT">٠ أصناف · ٠ دج</span>
+      <div class="cartbar"><span class="t" id="cartT"></span>
         <button class="send" id="send">أرسل الطلب</button></div>
       <p class="demonote">عرض للمزايا فقط — لا ينقلك لأي صفحة.</p>
     </div>
@@ -246,13 +249,13 @@ p{margin:0}
         <span class="cap">أرباح هذا الأسبوع</span>
         <span class="live"><span class="dot"></span> يُحسب لحظياً</span>
       </div>
-      <div class="amount" id="amt">٠ دج</div>
+      <div class="amount"><span class="num" id="amt">0</span> دج</div>
       <div class="bars" id="bars"><i></i><i></i><i></i><i></i><i></i><i></i><i class="peak"></i></div>
       <div class="days"><span>سبت</span><span>أحد</span><span>إثن</span><span>ثلا</span><span>أرب</span><span>خمي</span><span>جمع</span></div>
       <div class="pmeta">
-        <div>المبيعات<b id="mSales">٠</b></div>
-        <div>تكلفة المواد<b id="mCost">٠</b></div>
-        <div>صافي الربح<b id="mProfit" style="color:var(--gold)">٠</b></div>
+        <div>المبيعات<b id="mSales">0</b></div>
+        <div>تكلفة المواد<b id="mCost">0</b></div>
+        <div>صافي الربح<b id="mProfit" style="color:var(--gold)">0</b></div>
       </div>
       <button class="replay" id="replay">▶ إعادة التشغيل</button>
       <p class="demonote" style="color:#B69B9C">مثال حيّ للمزايا فقط — الأرقام توضيحية.</p>
@@ -263,7 +266,7 @@ p{margin:0}
 </div>
 
 <script>
-const ar = n => n.toLocaleString('ar-EG');
+const ar = n => String(n).replace(/\B(?=(\d{3})+(?!\d))/g,' ');
 /* ── تبديل الوضع ── */
 const root=document.documentElement, tgl=document.getElementById('tgl'),
   txt=document.getElementById('tglTxt'), icon=document.getElementById('tglIcon');
@@ -295,17 +298,18 @@ function render(){
     const el=document.createElement('div');
     el.className='dish'+(q>0?' active':'');
     el.innerHTML=`<div class="ph" style="background:linear-gradient(135deg,${d[2]})"></div>
-      <div class="nm">${d[0]}</div><div class="pr">${ar(d[1])} دج</div>
+      <div class="nm">${d[0]}</div><div class="pr"><span class="num">${ar(d[1])}</span> دج</div>
       <div class="qrow">${q>0?`<span class="stepper">
         <button data-k="${key}" data-d="-1">−</button><span class="q">${ar(q)}</span>
         <button data-k="${key}" data-d="1">+</button></span>`
         :`<button class="add" data-k="${key}" data-d="1">＋ أضف</button>`}
-        <span class="pr">${ar(d[1]*q)} دج</span></div>`;
+        <span class="pr"><span class="num">${ar(d[1]*q)}</span> دج</span></div>`;
     grid.appendChild(el);
   });
   const items=Object.values(cart).reduce((s,x)=>s+x.q,0);
   const total=Object.values(cart).reduce((s,x)=>s+x.q*x.p,0);
-  document.getElementById('cartT').textContent=`${ar(items)} أصناف · ${ar(total)} دج`;
+  document.getElementById('cartT').innerHTML=
+    `<span class="num">${ar(items)}</span> أصناف · <span class="num">${ar(total)}</span> دج`;
 }
 grid.onclick=e=>{const b=e.target.closest('button[data-k]');if(!b)return;
   const key=b.dataset.k, d=+b.dataset.d, i=+key.replace(cat,''), price=MENU[cat][i][1];
@@ -334,7 +338,7 @@ function play(){
   bars.forEach((b,i)=>{
     if(reduce){b.style.height=heights[i]+'%';return;}
     b.style.height='8%'; setTimeout(()=>b.style.height=heights[i]+'%',120+i*130);});
-  easeCount(document.getElementById('amt'),profit,' دج');
+  easeCount(document.getElementById('amt'),profit,'');
   easeCount(document.getElementById('mSales'),sales,'');
   easeCount(document.getElementById('mCost'),cost,'');
   easeCount(document.getElementById('mProfit'),profit,'');
